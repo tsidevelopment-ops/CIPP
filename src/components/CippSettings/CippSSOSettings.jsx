@@ -6,8 +6,6 @@ import {
   AccordionSummary,
   Alert,
   Button,
-  CardActions,
-  CardContent,
   Chip,
   Divider,
   Link,
@@ -30,7 +28,7 @@ import { CippApiResults } from "../CippComponents/CippApiResults";
 
 const SSO_DOCS_URL = "https://docs.cipp.app/user-documentation/cipp/advanced/authentication/sso";
 
-// The three delegated scopes New-CIPPSSOApp requests. Kept here verbatim so an admin can hand
+// The four delegated scopes New-CIPPSSOApp requests. Kept here verbatim so an admin can hand
 // this straight to their own security team without having to ask what the app can reach.
 const ssoAppPermissions = [
   {
@@ -47,6 +45,11 @@ const ssoAppPermissions = [
     reason:
       "Reads the signed-in user's UPN, which CIPP matches against the CIPP Users list to decide their roles.",
   },
+  {
+    name: "offline_access",
+    reason:
+      "Issues a refresh token so a signed-in session can be renewed without the user signing in again. Grants no additional data access.",
+  },
 ];
 
 // Application permissions already consented on CIPP-SAM that the setup runs as. Nothing new is
@@ -59,7 +62,7 @@ const samPermissionsUsed = [
   {
     name: "Directory.ReadWrite.All",
     reason:
-      "Grants tenant-wide consent for the three scopes above so your users are not prompted to consent at sign-in.",
+      "Grants tenant-wide consent for the four scopes above so your users are not prompted to consent at sign-in.",
   },
   {
     name: "Policy.ReadWrite.ApplicationConfiguration",
@@ -191,6 +194,11 @@ export const CippSSOSettings = () => {
   // showing a clean list a customer would read as confirmation.
   const domainsUnverified = hasAppId && data?.domainsVerified === false;
 
+  // The weekly token update rotates the secret inside this window.
+  const secretExpiringSoon =
+    Boolean(data?.secretExpires) &&
+    new Date(data.secretExpires).getTime() - Date.now() <= 30 * 24 * 60 * 60 * 1000;
+
   const preconsentInfo =
     data?.preconsented === true
       ? { label: "Granted", color: "success" }
@@ -304,9 +312,77 @@ export const CippSSOSettings = () => {
     );
   });
 
+  const cardButtons = !ssoStatus.isLoading && (
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", justifyContent: "flex-end", ml: "auto" }}>
+        {showCreate && (
+          <Button
+            variant="contained"
+            onClick={handleCreate}
+            disabled={ssoAction.isPending}
+          >
+            Create SSO App
+          </Button>
+        )}
+
+        {canRepair && (
+          <>
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={handleRecreate}
+              disabled={ssoAction.isPending}
+            >
+              Recreate
+            </Button>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={handleRepair}
+              disabled={ssoAction.isPending}
+            >
+              Repair
+            </Button>
+          </>
+        )}
+
+        {isProvisioned && (
+          <>
+            <Button
+              variant="outlined"
+              color={missingSignInHosts.length > 0 ? "warning" : "inherit"}
+              onClick={handleRefreshSignInUrls}
+              disabled={ssoAction.isPending}
+            >
+              Refresh Sign-in URLs
+            </Button>
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={handleRotateSecret}
+              disabled={ssoAction.isPending}
+            >
+              Rotate Secret
+            </Button>
+            <Button
+              variant="contained"
+              onClick={handleUpdate}
+              disabled={ssoAction.isPending}
+            >
+              Save Changes
+            </Button>
+          </>
+        )}
+    </Stack>
+  );
+
   return (
-    <CippButtonCard title="SSO App Registration" isFetching={ssoStatus.isFetching}>
-      <CardContent>
+    <CippButtonCard
+      title="SSO App Registration"
+      isFetching={ssoStatus.isFetching}
+      CardButton={cardButtons}
+      cardSx={{ height: "100%", display: "flex", flexDirection: "column" }}
+    >
+      <>
         {ssoStatus.isLoading ? (
           <Stack spacing={2}>
             <Skeleton variant="rectangular" height={40} />
@@ -359,9 +435,9 @@ export const CippSSOSettings = () => {
                       }}>
                       No application (app-only) permissions are requested, so the app can never act
                       without a signed-in user. None of these scopes grant access to mail, files,
-                      Teams or directory data — they are the standard OpenID Connect sign-in scopes,
-                      classed by Microsoft as low impact. Who can actually reach CIPP is still
-                      controlled by the CIPP Users list.
+                      Teams or directory data — they are the standard OpenID Connect sign-in scopes
+                      plus offline_access to renew the session, all classed by Microsoft as low
+                      impact. Who can actually reach CIPP is still controlled by the CIPP Users list.
                     </Typography>
                   </div>
 
@@ -475,6 +551,40 @@ export const CippSSOSettings = () => {
                   <Grid size={{ xs: 12, md: 8 }}>
                     <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
                       {data.appId}
+                    </Typography>
+                  </Grid>
+                </>
+              )}
+
+              {data?.secretExpires && (
+                <>
+                  <Grid size={{ xs: 12, md: 4 }}>
+                    <Typography variant="body2" sx={{
+                      color: "text.secondary"
+                    }}>
+                      Client secret
+                    </Typography>
+                  </Grid>
+                  <Grid size={{ xs: 12, md: 8 }}>
+                    <Stack direction="row" spacing={1} useFlexGap sx={{
+                      flexWrap: "wrap",
+                      alignItems: "center"
+                    }}>
+                      <Typography variant="body2">
+                        Expires {new Date(data.secretExpires).toLocaleDateString()}
+                      </Typography>
+                      {secretExpiringSoon && (
+                        <Chip label="Expiring soon" color="warning" size="small" />
+                      )}
+                    </Stack>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: "text.secondary",
+                        display: "block",
+                        mt: 0.5
+                      }}>
+                      Auto-rotates 30 days before expiry.
                     </Typography>
                   </Grid>
                 </>
@@ -667,71 +777,7 @@ export const CippSSOSettings = () => {
             </Accordion>
           </Stack>
         )}
-      </CardContent>
-      {!ssoStatus.isLoading && (
-        <CardActions sx={{ justifyContent: "flex-end", px: 2, pb: 2 }}>
-          <Stack direction="row" spacing={1}>
-            {showCreate && (
-              <Button
-                variant="contained"
-                onClick={handleCreate}
-                disabled={ssoAction.isPending}
-              >
-                Create SSO App
-              </Button>
-            )}
-
-            {canRepair && (
-              <>
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  onClick={handleRecreate}
-                  disabled={ssoAction.isPending}
-                >
-                  Recreate
-                </Button>
-                <Button
-                  variant="contained"
-                  color="warning"
-                  onClick={handleRepair}
-                  disabled={ssoAction.isPending}
-                >
-                  Repair
-                </Button>
-              </>
-            )}
-
-            {isProvisioned && (
-              <>
-                <Button
-                  variant="outlined"
-                  color={missingSignInHosts.length > 0 ? "warning" : "inherit"}
-                  onClick={handleRefreshSignInUrls}
-                  disabled={ssoAction.isPending}
-                >
-                  Refresh Sign-in URLs
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="warning"
-                  onClick={handleRotateSecret}
-                  disabled={ssoAction.isPending}
-                >
-                  Rotate Secret
-                </Button>
-                <Button
-                  variant="contained"
-                  onClick={handleUpdate}
-                  disabled={ssoAction.isPending}
-                >
-                  Save Changes
-                </Button>
-              </>
-            )}
-          </Stack>
-        </CardActions>
-      )}
+      </>
     </CippButtonCard>
   );
 };

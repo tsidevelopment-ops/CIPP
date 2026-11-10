@@ -3,6 +3,7 @@ import { CippIcons } from '../../utils/icon-registry'
 import CippFormComponent from '../CippComponents/CippFormComponent'
 import { getCippValidator } from '../../utils/get-cipp-validator'
 import { toAutoCompleteOptions } from '../../utils/to-autocomplete-options'
+import { generateUsername } from '../../utils/generate-username'
 import { CippFormCondition } from '../CippComponents/CippFormCondition'
 import { CippFormDomainSelector } from '../CippComponents/CippFormDomainSelector'
 import { CippFormUserSelector } from '../CippComponents/CippFormUserSelector'
@@ -40,6 +41,24 @@ const sharedMailboxApi = (tenantDomain) => ({
   valueField: 'UPN',
 })
 
+const sharePointSiteRoleOptions = [
+  { label: 'Members', value: 'Members' },
+  { label: 'Owners', value: 'Owners' },
+  { label: 'Visitors', value: 'Visitors' },
+]
+
+const sharePointSiteApi = (tenantDomain) => ({
+  queryKey: `SharePointSites-${tenantDomain}`,
+  url: '/api/ListSites',
+  data: { type: 'SharePointSiteUsage' },
+  labelField: (option) => `${option.displayName} (${option.webUrl})`,
+  valueField: 'webUrl',
+  addedField: {
+    rootWebTemplate: 'rootWebTemplate',
+    ownerPrincipalName: 'ownerPrincipalName',
+  },
+})
+
 const CippAddEditUser = (props) => {
   const { formControl, userSettingsDefaults, formType = 'add' } = props
   const tenantDomain = useSettings().currentTenant
@@ -56,7 +75,6 @@ const CippAddEditUser = (props) => {
   const userTemplates = ApiGetCall({
     url: `/api/ListNewUserDefaults?TenantFilter=${tenantDomain}`,
     queryKey: `UserDefaults-${tenantDomain}`,
-    refetchOnMount: false,
     refetchOnReconnect: false,
     enabled: formType === 'add',
   })
@@ -237,54 +255,6 @@ const CippAddEditUser = (props) => {
     queryClient,
   ])
 
-  // Helper function to generate username from template format
-  const generateUsername = (
-    format,
-    firstName,
-    lastName,
-    spaceHandling = 'keep',
-    spaceReplacement = ''
-  ) => {
-    if (!format || !firstName || !lastName) return ''
-
-    // Ensure format is a string
-    const formatString = typeof format === 'string' ? format : String(format)
-
-    let username = formatString
-
-    // Replace %FirstName[n]% patterns (extract first n characters per word)
-    username = username.replace(/%FirstName\[(\d+)\]%/gi, (match, num) => {
-      const n = parseInt(num)
-      return firstName
-        .split(/\s+/)
-        .map((word) => word.substring(0, n))
-        .join('');
-    })
-
-    // Replace %LastName[n]% patterns (extract first n characters per word)
-    username = username.replace(/%LastName\[(\d+)\]%/gi, (match, num) => {
-      const n = parseInt(num)
-      return lastName
-        .split(/\s+/)
-        .map((word) => word.substring(0, n))
-        .join('');
-    })
-
-    // Replace %FirstName% and %LastName%
-    username = username.replace(/%FirstName%/gi, firstName)
-    username = username.replace(/%LastName%/gi, lastName)
-
-    // Apply optional space handling
-    if (spaceHandling === 'remove') {
-      username = username.replace(/\s+/g, '')
-    } else if (spaceHandling === 'replace') {
-      username = username.replace(/\s+/g, spaceReplacement || '')
-    }
-
-    // Convert to lowercase
-    return username.toLowerCase()
-  }
-
   const validateOtherMails = (value) => {
     if (!value || (Array.isArray(value) && value.length === 0)) {
       return true
@@ -319,7 +289,10 @@ const CippAddEditUser = (props) => {
           displayName += selectedTemplate.displayName
         }
 
-        formControl.setValue('displayName', displayName, { shouldDirty: true })
+        formControl.setValue('displayName', displayName, {
+          shouldDirty: true,
+          shouldValidate: true,
+        })
       }
 
       // Auto-generate username if template has usernameFormat
@@ -356,6 +329,7 @@ const CippAddEditUser = (props) => {
           if (generatedUsername) {
             formControl.setValue('username', generatedUsername, {
               shouldDirty: true,
+              shouldValidate: true,
             })
           }
         }
@@ -444,9 +418,15 @@ const CippAddEditUser = (props) => {
         ? value.length > 0
         : value !== undefined && value !== null && value !== ''
       if (hasValue) {
-        formControl.setValue(fieldName, value, { shouldDirty: true })
+        formControl.setValue(fieldName, value, {
+          shouldDirty: true,
+          shouldValidate: true,
+        })
       } else if (isSwitch) {
-        formControl.setValue(fieldName, emptyValue, { shouldDirty: true })
+        formControl.setValue(fieldName, emptyValue, {
+          shouldDirty: true,
+          shouldValidate: true,
+        })
       }
     }
 
@@ -473,6 +453,7 @@ const CippAddEditUser = (props) => {
     )
 
     applyField('jobTitle', template.jobTitle)
+    applyField('addedAliases', template.addedAliases)
     applyField('streetAddress', template.streetAddress)
     applyField('city', template.city)
     applyField('state', template.state)
@@ -481,6 +462,7 @@ const CippAddEditUser = (props) => {
     applyField('companyName', template.companyName)
     applyField('department', template.department)
     applyField('mobilePhone', template.mobilePhone)
+    applyField('MustChangePass', template.MustChangePass === true, false)
     applyField('perUserMfa', template.perUserMfa === true, false)
 
     const templateBusinessPhone = Array.isArray(template.businessPhones)
@@ -549,6 +531,12 @@ const CippAddEditUser = (props) => {
         template.sharedCalendarPermission,
         sharedCalendarPermissionOptions
       )[0] ?? null,
+      null
+    )
+    applyField('sharePointSites', toAutoCompleteOptions(template.sharePointSites), [])
+    applyField(
+      'sharePointSiteRole',
+      toAutoCompleteOptions(template.sharePointSiteRole, sharePointSiteRoleOptions)[0] ?? null,
       null
     )
 
@@ -1171,6 +1159,30 @@ const CippAddEditUser = (props) => {
               formControl={formControl}
             />
           </Grid>
+          <Grid size={{ xs: 12, md: 8 }}>
+            <CippFormComponent
+              type="autoComplete"
+              label="SharePoint Sites"
+              name="sharePointSites"
+              multiple={true}
+              creatable={false}
+              api={sharePointSiteApi(tenantDomain)}
+              helperText="The user is added to these sites 15 minutes after creation, once the account has replicated to SharePoint."
+              formControl={formControl}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, md: 4 }}>
+            <CippFormComponent
+              type="autoComplete"
+              label="SharePoint Site Role"
+              name="sharePointSiteRole"
+              multiple={false}
+              creatable={false}
+              options={sharePointSiteRoleOptions}
+              helperText="Defaults to Members."
+              formControl={formControl}
+            />
+          </Grid>
         </>
       )}
       {formType === 'edit' && (
@@ -1295,6 +1307,12 @@ const CippAddEditUser = (props) => {
                 type="switch"
                 label="Send results to PSA"
                 name="postExecution.psa"
+                formControl={formControl}
+              />
+              <CippFormComponent
+                type="switch"
+                label="Push notification to my devices"
+                name="postExecution.push"
                 formControl={formControl}
               />
               <CippFormComponent
